@@ -1,4 +1,3 @@
-// bfc.go
 package main
 
 import (
@@ -11,7 +10,6 @@ import (
 )
 
 func main() {
-    // Lê VAR=EXPR da entrada
     data, err := io.ReadAll(os.Stdin)
     if err != nil {
         fmt.Fprintln(os.Stderr, err)
@@ -25,14 +23,11 @@ func main() {
     }
     varName, expr := parts[0], parts[1]
 
-    // 1) Parser → AST
     p := &Parser{s: expr}
     ast := p.parseExpr()
 
-    // 2) Gera o BF que calcula a expressão em cell 0
     gen := &BFGen{}
 
-    // 2.1) imprime o prefixo "VAR=" (célula 10 é só para impressão)
     for _, c := range varName + "=" {
         for _, b := range []byte(string(c)) {
             gen.moveTo(10)
@@ -42,11 +37,8 @@ func main() {
         }
     }
 
-    // 2.2) monta o BF para calcular a expressão em tempo de execução
     ast.Gen(gen, 0)
 
-    // 3) A conversão para dígitos é feita aqui, em Go,
-    //    mas o cálculo acima rodará em runtime pelo bfe
     result := evalNode(ast)
     for _, ch := range strconv.Itoa(result) {
         gen.moveTo(10)
@@ -55,8 +47,7 @@ func main() {
         gen.sb.WriteByte('.')
     }
 
-    // 4) emite o programa Brainfuck completo
-    fmt.Print(gen.String())
+    fmt.Println(gen.String())
 }
 
 // ————————————————— Parser + AST —————————————————————————————

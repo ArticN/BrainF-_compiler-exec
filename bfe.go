@@ -1,4 +1,3 @@
-// bfe.go
 package main
 
 import (
@@ -15,7 +14,6 @@ func main() {
     }
     code := string(data)
 
-    // mapeia saltos [↔]
     jumps := map[int]int{}
     var stack []int
     for i, c := range code {
@@ -68,8 +66,6 @@ func main() {
                 ip = jumps[ip]
             }
         }
-    }
-    
+    } 
     os.Stdout.Write([]byte{'\n'})
-
 }
