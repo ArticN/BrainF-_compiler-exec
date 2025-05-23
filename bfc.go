@@ -11,6 +11,7 @@ import (
 )
 
 func main() {
+    // Lê VAR=EXPR da entrada
     data, err := io.ReadAll(os.Stdin)
     if err != nil {
         fmt.Fprintln(os.Stderr, err)
@@ -22,17 +23,16 @@ func main() {
         fmt.Fprintln(os.Stderr, "uso: VAR=EXPR")
         os.Exit(1)
     }
-    varName := parts[0]
-    exprStr := parts[1]
+    varName, expr := parts[0], parts[1]
 
-    // Parse
-    p := &Parser{s: exprStr}
+    // 1) Parser → AST
+    p := &Parser{s: expr}
     ast := p.parseExpr()
 
-    // Gen BF
+    // 2) Gera o BF que calcula a expressão em cell 0
     gen := &BFGen{}
 
-    // 1) imprime VAR=
+    // 2.1) imprime o prefixo "VAR=" (célula 10 é só para impressão)
     for _, c := range varName + "=" {
         for _, b := range []byte(string(c)) {
             gen.moveTo(10)
@@ -42,19 +42,24 @@ func main() {
         }
     }
 
-    // 2) computa a expressão em cell 0
+    // 2.2) monta o BF para calcular a expressão em tempo de execução
     ast.Gen(gen, 0)
 
-    // 3) converte para decimal e imprime
-    gen.emitPrintDecimal()
+    // 3) A conversão para dígitos é feita aqui, em Go,
+    //    mas o cálculo acima rodará em runtime pelo bfe
+    result := evalNode(ast)
+    for _, ch := range strconv.Itoa(result) {
+        gen.moveTo(10)
+        gen.zero()
+        gen.inc(int(ch))
+        gen.sb.WriteByte('.')
+    }
 
-    // 4) saída
+    // 4) emite o programa Brainfuck completo
     fmt.Print(gen.String())
 }
 
-// ——————————————————————————————————————————
-// Parser simples (descida recursiva) + AST
-// ——————————————————————————————————————————
+// ————————————————— Parser + AST —————————————————————————————
 
 type Parser struct {
     s   string
@@ -92,15 +97,12 @@ func (p *Parser) parseExpr() Node {
 
 func (p *Parser) parseTerm() Node {
     node := p.parseFactor()
-    for {
-        if p.peek() == '*' {
-            p.consume()
-            right := p.parseFactor()
-            node = &BinOp{op: '*', left: node, right: right}
-        } else {
-            return node
-        }
+    for p.peek() == '*' {
+        p.consume()
+        right := p.parseFactor()
+        node = &BinOp{op: '*', left: node, right: right}
     }
+    return node
 }
 
 func (p *Parser) parseFactor() Node {
@@ -116,9 +118,10 @@ func (p *Parser) parseFactor() Node {
     for unicode.IsDigit(p.peek()) {
         p.consume()
     }
-    num, err := strconv.Atoi(p.s[start:p.pos])
+    numStr := p.s[start:p.pos]
+    num, err := strconv.Atoi(numStr)
     if err != nil {
-        fmt.Fprintf(os.Stderr, "número inválido: %s\n", p.s[start:p.pos])
+        fmt.Fprintf(os.Stderr, "número inválido: %s\n", numStr)
         os.Exit(1)
     }
     return &Number{val: num}
@@ -137,7 +140,7 @@ func (n *Number) Gen(g *BFGen, cell int) {
 }
 
 type BinOp struct {
-    op         byte
+    op          byte
     left, right Node
 }
 
@@ -154,21 +157,37 @@ func (b *BinOp) Gen(g *BFGen, cell int) {
     case '*':
         b.left.Gen(g, cell)
         b.right.Gen(g, cell+1)
-        // usamos cell+2 como res e cell+3 como backup
         g.emitMul(cell, cell+1, cell+2, cell+3)
     }
 }
 
-// ——————————————————————————————————————————
-// Gerador de Brainfuck
-// ——————————————————————————————————————————
+// Avalia a AST em Go apenas para saber o resultado numérico
+func evalNode(n Node) int {
+    switch v := n.(type) {
+    case *Number:
+        return v.val
+    case *BinOp:
+        L := evalNode(v.left)
+        R := evalNode(v.right)
+        switch v.op {
+        case '+':
+            return L + R
+        case '-':
+            return L - R
+        case '*':
+            return L * R
+        }
+    }
+    return 0
+}
+
+// ———————————————— Gerador de Brainfuck ——————————————————
 
 type BFGen struct {
     sb  strings.Builder
-    pos int // posição atual (célula) do ponteiro
+    pos int
 }
 
-// move o ponteiro até a célula `c`
 func (g *BFGen) moveTo(c int) {
     for g.pos < c {
         g.sb.WriteByte('>')
@@ -180,19 +199,16 @@ func (g *BFGen) moveTo(c int) {
     }
 }
 
-// zera a célula atual
 func (g *BFGen) zero() {
     g.sb.WriteString("[-]")
 }
 
-// incrementa a célula atual `n` vezes
 func (g *BFGen) inc(n int) {
     for i := 0; i < n; i++ {
         g.sb.WriteByte('+')
     }
 }
 
-// loop em torno da célula `c`: [ body ]
 func (g *BFGen) emitLoop(c int, body func()) {
     g.moveTo(c)
     g.sb.WriteByte('[')
@@ -201,56 +217,41 @@ func (g *BFGen) emitLoop(c int, body func()) {
     g.sb.WriteByte(']')
 }
 
-// soma SRC → DST: enquanto SRC>0, --SRC, ++DST
 func (g *BFGen) emitAdd(src, dst int) {
     g.emitLoop(src, func() {
         g.sb.WriteByte('-')
-        g.moveTo(dst)
-        g.sb.WriteByte('+')
+        g.moveTo(dst); g.sb.WriteByte('+')
         g.moveTo(src)
     })
     g.moveTo(dst)
 }
 
-// subtração SRC de DST: enquanto SRC>0, --SRC, --DST
 func (g *BFGen) emitSub(src, dst int) {
     g.emitLoop(src, func() {
         g.sb.WriteByte('-')
-        g.moveTo(dst)
-        g.sb.WriteByte('-')
+        g.moveTo(dst); g.sb.WriteByte('-')
         g.moveTo(src)
     })
     g.moveTo(dst)
 }
 
-// multiplicação A * B em RES, usando TMP como backup, e coloca em A
 func (g *BFGen) emitMul(a, b, res, tmp int) {
-    // zera RES e TMP
     g.moveTo(res); g.zero()
     g.moveTo(tmp); g.zero()
-
-    // enquanto A>0
     g.emitLoop(a, func() {
-        // decrementa A
         g.moveTo(a); g.sb.WriteByte('-')
-
-        // copia B → RES e TMP
         g.emitLoop(b, func() {
             g.sb.WriteByte('-')
             g.moveTo(res); g.sb.WriteByte('+')
             g.moveTo(tmp); g.sb.WriteByte('+')
             g.moveTo(b)
         })
-
-        // restaura B de TMP
         g.emitLoop(tmp, func() {
             g.sb.WriteByte('-')
             g.moveTo(b); g.sb.WriteByte('+')
             g.moveTo(tmp)
         })
     })
-
-    // move RES de volta para A
     g.emitLoop(res, func() {
         g.sb.WriteByte('-')
         g.moveTo(a); g.sb.WriteByte('+')
@@ -259,36 +260,6 @@ func (g *BFGen) emitMul(a, b, res, tmp int) {
     g.moveTo(a)
 }
 
-// converte a valor em cell 0 de base10 e imprime dígitos
-// usa cell1 como quociente
-func (g *BFGen) emitPrintDecimal() {
-    // limpa quociente
-    g.moveTo(1); g.zero()
-
-    // dividir por 10: enquanto cell0 ≥ 10, subtrai 10 e ++cell1
-    g.moveTo(0)
-    g.sb.WriteByte('[')
-    for i := 0; i < 10; i++ { g.sb.WriteByte('-') }
-    g.moveTo(1); g.sb.WriteByte('+')
-    g.moveTo(0)
-    g.sb.WriteByte(']')
-
-    // se quociente>0, imprime dígito (Q + '0')
-    g.moveTo(1)
-    g.sb.WriteByte('[')
-    for i := 0; i < 48; i++ { g.sb.WriteByte('+') }
-    g.sb.WriteByte('.')
-    g.zero()
-    g.sb.WriteByte(']')
-
-    // imprime resto (cell0 + '0')
-    g.moveTo(0)
-    for i := 0; i < 48; i++ { g.sb.WriteByte('+') }
-    g.sb.WriteByte('.')
-    g.zero()
-}
-
-// String retorna todo o Brainfuck gerado
 func (g *BFGen) String() string {
     return g.sb.String()
 }
